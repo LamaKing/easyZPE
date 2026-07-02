@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 
-"""Parser for Quantum Espresso input. Read a set of Namespaces and Card. Works but not all namespaces and cards are implemented"""
+"""Parser for Quantum ESPRESSO pw.x input files.
+
+Reads &CONTROL, &SYSTEM, &ELECTRONS (mandatory), &IONS, &CELL (optional),
+ATOMIC_SPECIES, K_POINTS, and HUBBARD cards, and returns a dict compatible
+with ASE's write_espresso_in interface.
+
+Not all namespaces and cards are implemented; unsupported blocks raise
+NotImplementedError explicitly rather than silently passing.
+"""
 
 import sys, logging
 from typing import List, Dict
@@ -29,6 +37,31 @@ def isfloat(string):
     return True
 
 def get_Espresso_input(fname, debug=False):
+    """Parse a QE pw.x input file and return a dict for ASE's write_espresso_in.
+
+    Parameters
+    ----------
+    fname : str
+        Path to the QE input file.
+    debug : bool
+        Enable verbose logging of the parser state.
+
+    Returns
+    -------
+    dict with keys:
+        'input_data'      : nested dict of namelist values (&CONTROL, &SYSTEM, ...)
+        'pseudopotentials': dict mapping element symbol -> pseudopotential filename
+        'kpts'            : k-point grid (list) or None for Gamma-only
+        'hubbardU'        : Hubbard U parameters (only if HUBBARD block present)
+
+    Raises
+    ------
+    RuntimeError
+        If a mandatory block (&CONTROL, &SYSTEM, &ELECTRONS, ATOMIC_SPECIES,
+        K_POINTS) is absent from the file.
+    NotImplementedError
+        If an unsupported K_POINTS type or Hubbard term is encountered.
+    """
 
     c_log = logging.getLogger('Espresso_inptu')
     if debug:
@@ -93,7 +126,7 @@ def get_Espresso_input(fname, debug=False):
         elif ktype in ['tpiba', 'tpiba_b', 'crystal_b', 'tpiba_c', 'crystal_c']:
             raise NotImplementedError('Kpoint %s not implemented' % ktype)
         else:
-            raise RuntimeError('Something went wrong')
+            raise RuntimeError('Unknown K_POINTS type: %s' % ktype)
 
     def get_hubbard(lines):
         # !!! based on our own implementation of Espresso read/write function!
@@ -101,7 +134,7 @@ def get_Espresso_input(fname, debug=False):
         hubbardU['option'] = lines[0].split()[1]
         for l in lines[1:]:
             ls = l.split()
-            if ls[0] != 'U': raise NotImplemented('Only parsing U')
+            if ls[0] != 'U': raise NotImplementedError('Only Hubbard U is implemented, got: %s' % ls[0])
             elem, manifold = ls[1].split('-')
             Uval = float(ls[2])
             hubbardU['params'].append([elem, manifold, Uval])
@@ -131,9 +164,10 @@ def get_Espresso_input(fname, debug=False):
         for l in instr.readlines():
             l = l.strip().replace('"','').replace("'", "")
             c_log.debug(l)
-            if not len(l): continue # skip empty lines
-            if l[0] in ['!', '#']: # skip comments/empty lines
-                c_log.debug('skip %s' % l)
+            if not len(l): continue
+            if l[0] in ['!', '#']:
+                c_log.debug('skip comment: %s' % l)
+                continue
             lines.append(l)
 
     # sanity check
