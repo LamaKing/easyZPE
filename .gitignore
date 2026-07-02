@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+
+# easyZPE test cases and outputs (too large / not for version control)
+test_case*/
+test_easyZPE.py
+
+# old working copies
+old/

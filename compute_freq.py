@@ -25,7 +25,7 @@ def qestruct2ase(xml_atomic_structure):
 
 
 
-def compute_freq(indices, displ, geom, infile, indir, qeout, outdir, debug):
+def compute_freq(indices, displ, geom, infile, indir, qeout, outdir, debug, temperature=298.15):
     """Create dynamical matrix from DFT data (QE xml output).
     Diagonalise it.
     Return eigeval (in Eh/(Da*a0^2)), eigenvectors (columns of matrix), and frequncies (eigval in THz)."""
@@ -144,8 +144,10 @@ def compute_freq(indices, displ, geom, infile, indir, qeout, outdir, debug):
     np.savetxt(pjoin(outdir, 'dyna_matr.dat'), dynaMatr, fmt='%25.15g', header='Eh/(a0^2 Da)')
 
     # compute diagonalisation
+    # eigh exploits real-symmetric structure: guarantees real eigenvalues and returns them sorted ascending
     print('Diagonalising...')
-    eigval, eigvec = np.linalg.eig(dynaMatr)
+    dynaMatr_sym = (dynaMatr + dynaMatr.T) / 2  # symmetrise to suppress DFT noise before eigh
+    eigval, eigvec = np.linalg.eigh(dynaMatr_sym)
     print()
 
     print('Ordered results:')
@@ -155,24 +157,12 @@ def compute_freq(indices, displ, geom, infile, indir, qeout, outdir, debug):
         print('eigvect')
         print(eigvec)
 
-    # check and handle numerical quirks
-    thold = 1e-16
+    thold = 1e-10
     for ii, i in enumerate(eigval):
-        if np.imag(i) >thold: print('!'*10, 'Eigen not real', i, 'discard imag')
-    eigval = eigval.astype(float)
-    for ii, i in enumerate(eigval):
-        if i <thold: print('!'*10, 'Eigen NEGATIVE:', i)
-    # is there a way to deal with this properly? The problem is in DFT calc, but we should signal it correctly
-    #eigval[eigval<-thold] *= -1 # reverse negative
-    #eigval[eigval<-thold] = 0 # reverse negative
-    #eigval[np.abs(eigval)<thold] = 0 # avoid nan
+        if i < -thold: print('!'*10, 'Eigen NEGATIVE:', i)
 
-    # sort eigenvalues in ascending order
-    eigsort = np.argsort(eigval)
-    eigval = eigval[eigsort]
-    eigvec = eigvec[:,eigsort] # sort eigenvectors
-    omegas = np.array([np.sqrt(e) if e>0 else -np.sqrt(-e) for e in eigval]) # D@eigv = omega^2 * eigv
-    #omegas = np.array([np.sqrt(e) if e>0 else np.sqrt(-e) for e in eigval]) # D@eigv = omega^2 * eigv
+    # eigenvalues already sorted ascending by eigh; encode imaginary modes as negative frequencies
+    omegas = np.array([np.sqrt(e) if e > 0 else -np.sqrt(-e) for e in eigval])
 
     # print and save
     print('         '+' '*15, ' '.join(['     l%-4s' % ie for ie in range(eigval.shape[0])]))
@@ -180,7 +170,8 @@ def compute_freq(indices, displ, geom, infile, indir, qeout, outdir, debug):
     print('freq      %-15s' % '[THz]',  ' '.join(['%10.4f' % e for e in omegas*conv2THz]))
     print('freq      %-15s' % '[cm^-1]',' '.join(['%10.4f' % e for e in omegas*conv2THz*THz2cminv]))
 
-    KBT = 0.025 # eV
+    KB = 8.617333262e-5  # eV/K
+    KBT = KB * temperature
     ZPEs = np.zeros(len(omegas))
     Evibs = np.zeros(len(omegas))
     TSs = np.zeros(len(omegas))
@@ -204,13 +195,14 @@ def compute_freq(indices, displ, geom, infile, indir, qeout, outdir, debug):
         # debug: check we are doing separate terms and sum correctly
         #print(np.isclose(Evibs[io]-TSs[io], Avibs[io]), Evibs[io]-TSs[io], Avibs[io])
 
+    Tlabel = '%.0fK' % temperature
     print('Evib        %-15s' % '[eV]',   ' '.join(['%10.4f' % e for e in Evibs]),
           'sum: %10.4g' % np.sum(Evibs))
-    print('TS(Troom)   %-15s' % '[eV]', ' '.join(['%10.4f' % e for e in TSs]),
+    print('TS(%s)%s' % (Tlabel, ' '*(9-len(Tlabel))) + '%-15s' % '[eV]', ' '.join(['%10.4f' % e for e in TSs]),
           'sum: %10.4g' % np.sum(TSs))
     print('ZPE         %-15s' % '[eV]',   ' '.join(['%10.4f' % e for e in ZPEs]),
           'sum: %10.4g' % np.sum(ZPEs))
-    print('Avib(Troom) %-15s' % '[eV]', ' '.join(['%10.4f' % e for e in Avibs]),
+    print('Avib(%s)%s' % (Tlabel, ' '*(8-len(Tlabel))) + '%-15s' % '[eV]', ' '.join(['%10.4f' % e for e in Avibs]),
           'sum: %10.4g' % np.sum(Avibs))
 
     with open(pjoin(outdir, 'eigenvalues.dat'), 'w') as outf:
@@ -256,15 +248,21 @@ if __name__ == "__main__":
     parser.add_argument('--qeout',
                         type=str, default='pwscf.xml',
                         help='name of QE XML output. Must be the same for all displacement runs.')
+    parser.add_argument('--indir',
+                        type=str, default='./',
+                        help='directory containing the dpos_*/dneg_* displacement folders.')
     parser.add_argument('--outdir',
                         type=str, default='./',
-                        help='directory for saving files.')
+                        help='directory for saving output files.')
     parser.add_argument('-d', '--displ',
                         type=float, default=0.01,
                         help='displacement used in finite difference [Ang]')
     parser.add_argument('-f', '--filename',
                         type=str, default='pw.in',
                         help='QE input file (for masses and displacement check)')
+    parser.add_argument('-T', '--temperature',
+                        type=float, default=298.15,
+                        help='temperature for thermal corrections [K]')
     parser.add_argument('--debug',
                         action='store_true', help='print debug informations')
     # --- --- init
@@ -272,8 +270,9 @@ if __name__ == "__main__":
 
     infile = args.filename # QE input file with starting structure
     qeout = args.qeout     # XML output of QE ! must be the same for all displacements!
+    indir = args.indir     # where the dpos_*/dneg_* folders are
     outdir = args.outdir   # where to save results
-    if not os.path.exists(outdir): os.makedirs(outdir) # if not already there, create (with intermediaries)
+    if not os.path.exists(outdir): os.makedirs(outdir)
     debug = args.debug
 
     # displacement from equilibrium structure
@@ -284,4 +283,4 @@ if __name__ == "__main__":
     # which atoms have been displaced
     indices = args.indices
 
-    compute_freq(indices, displ, geom, infile, outdir, qeout, outdir, debug)
+    compute_freq(indices, displ, geom, infile, indir, qeout, outdir, debug, args.temperature)
