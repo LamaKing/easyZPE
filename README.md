@@ -1,4 +1,4 @@
-![logo](logo.png)
+![logo](https://raw.githubusercontent.com/LamaKing/easyZPE/main/logo.png)
 
 # easyZPE
 
